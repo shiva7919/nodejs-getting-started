@@ -11,23 +11,18 @@ pipeline {
 
         stage('Checkout') {
             steps {
-                echo "Checking out code..."
                 git branch: 'main', url: 'https://github.com/KishanGollamudi/nodejs-getting-started.git'
             }
         }
 
-        stage('Install & Build App') {
+        stage('Install Dependencies') {
             steps {
                 sh '''
-                    apt-get update && apt-get install -y zip
-
-                    npm install --no-audit --no-fund
-
-                    echo "No build step for this project, skipping build..."
+                    node -v
+                    npm -v
                     
-                    zip -r artifact.zip \
-                        . \
-                        --exclude="**/node_modules/**"
+                    echo "Installing Node dependencies..."
+                    npm install --no-audit --no-fund
                 '''
             }
         }
@@ -36,8 +31,6 @@ pipeline {
             steps {
                 withSonarQubeEnv('My-Sonar') {
                     sh '''
-                        export PATH=$PATH:/opt/sonar-scanner/bin
-
                         sonar-scanner \
                         -Dsonar.projectKey=nodeapp \
                         -Dsonar.sources=. \
@@ -48,7 +41,15 @@ pipeline {
             }
         }
 
-        stage('Upload Artifact to Nexus') {
+        stage('Package Artifact') {
+            steps {
+                sh '''
+                    zip -r artifact.zip . -x "node_modules/*"
+                '''
+            }
+        }
+
+        stage('Upload to Nexus') {
             steps {
                 sh '''
                     curl -u $NEXUS_CRED_USR:$NEXUS_CRED_PSW \
@@ -62,22 +63,16 @@ pipeline {
             steps {
                 sh '''
                     docker build \
-                    --build-arg NEXUS_URL=http://54.85.207.105:8081 \
-                    --build-arg REPO_PATH=repository/nodejs/artifact-${BUILD_NUMBER}.zip \
-                    --build-arg NEXUS_USER=$NEXUS_CRED_USR \
-                    --build-arg NEXUS_PASS=$NEXUS_CRED_PSW \
                     -t kishangollamudi/nodeapp:${BUILD_NUMBER} .
                 '''
             }
         }
 
-        stage('Push to Docker Hub') {
+        stage('Push Docker Image') {
             steps {
                 sh '''
                     echo $DOCKER_HUB_PSW | docker login -u $DOCKER_HUB_USR --password-stdin
                     docker push kishangollamudi/nodeapp:${BUILD_NUMBER}
-                    docker tag kishangollamudi/nodeapp:${BUILD_NUMBER} kishangollamudi/nodeapp:latest
-                    docker push kishangollamudi/nodeapp:latest
                 '''
             }
         }
@@ -85,7 +80,7 @@ pipeline {
 
     post {
         always {
-            echo 'Pipeline finished!'
+            echo "Pipeline finished!"
         }
     }
 }
