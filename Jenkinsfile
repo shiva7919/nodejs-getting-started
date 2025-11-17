@@ -22,21 +22,18 @@ pipeline {
 
         stage('Install Dependencies') {
             steps {
-                echo "npm install..."
                 sh "npm install"
             }
         }
 
         stage('Run Tests') {
             steps {
-                echo "Skipping Tests..."
                 sh 'echo "Tests skipped"'
             }
         }
 
         stage('SonarQube Analysis') {
             steps {
-                echo "Running Sonar Analysis..."
                 withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
                     withSonarQubeEnv('My-Sonar') {
                         sh """
@@ -52,16 +49,26 @@ pipeline {
 
         stage('Package Artifact (ZIP)') {
             steps {
-                echo "Zipping project using NPX..."
-                sh """
-                    npx zip-a-folder . nodeapp-${VERSION}.zip
-                """
+                echo "Creating ZIP using pure Node.js..."
+
+                sh '''
+                    node - << 'EOF'
+                    const fs = require('fs');
+                    const archiver = require('archiver');
+
+                    const output = fs.createWriteStream('nodeapp-${VERSION}.zip');
+                    const archive = archiver('zip');
+
+                    archive.pipe(output);
+                    archive.directory('.', false);
+                    archive.finalize();
+                    EOF
+                '''
             }
         }
 
         stage('Upload to Nexus') {
             steps {
-                echo "Uploading ZIP to Nexus..."
                 withCredentials([usernamePassword(
                     credentialsId: 'nexus',
                     usernameVariable: 'NEXUS_USER',
@@ -78,7 +85,6 @@ pipeline {
 
         stage('Build Docker Image') {
             steps {
-                echo "Building Docker Image..."
                 script {
                     docker.build("${DOCKER_IMAGE}:${VERSION}")
                 }
@@ -87,7 +93,6 @@ pipeline {
 
         stage('Push to DockerHub') {
             steps {
-                echo "Pushing Docker Image..."
                 withCredentials([usernamePassword(
                     credentialsId: 'dockerhub-user',
                     usernameVariable: 'DH_USER',
@@ -106,7 +111,6 @@ pipeline {
 
     post {
         always {
-            echo "Cleaning Workspace..."
             cleanWs()
         }
     }
