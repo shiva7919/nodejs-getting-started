@@ -2,9 +2,9 @@ pipeline {
     agent any
 
     environment {
-        SONAR_TOKEN = credentials('sonar-token')
-        NEXUS_CRED  = credentials('nexus')
-        DOCKER_HUB  = credentials('dockerhub-user')
+        SONAR_TOKEN = credentials('SONAR-TOKEN')
+        NEXUS_CRED = credentials('NEXUS-CRED')
+        DOCKER_HUB = credentials('DOCKER-HUB')
     }
 
     stages {
@@ -18,10 +18,13 @@ pipeline {
         stage('Install Dependencies') {
             steps {
                 sh '''
+                    echo "Node version:"
                     node -v
+
+                    echo "NPM version:"
                     npm -v
-                    
-                    echo "Installing Node dependencies..."
+
+                    echo Installing Node dependencies...
                     npm install --no-audit --no-fund
                 '''
             }
@@ -32,10 +35,10 @@ pipeline {
                 withSonarQubeEnv('My-Sonar') {
                     sh '''
                         sonar-scanner \
-                        -Dsonar.projectKey=nodeapp \
-                        -Dsonar.sources=. \
-                        -Dsonar.host.url=http://54.85.207.105:9000 \
-                        -Dsonar.login=$SONAR_TOKEN
+                          -Dsonar.projectKey=nodeapp \
+                          -Dsonar.sources=. \
+                          -Dsonar.host.url=http://54.85.207.105:9000 \
+                          -Dsonar.login=$SONAR_TOKEN
                     '''
                 }
             }
@@ -44,7 +47,7 @@ pipeline {
         stage('Package Artifact') {
             steps {
                 sh '''
-                    zip -r artifact.zip . -x "node_modules/*"
+                    zip -r nodeapp.zip .
                 '''
             }
         }
@@ -52,9 +55,9 @@ pipeline {
         stage('Upload to Nexus') {
             steps {
                 sh '''
-                    curl -u $NEXUS_CRED_USR:$NEXUS_CRED_PSW \
-                    --upload-file artifact.zip \
-                    http://54.85.207.105:8081/repository/nodejs/artifact-${BUILD_NUMBER}.zip
+                    curl -v -u $NEXUS_CRED_USR:$NEXUS_CRED_PSW \
+                        --upload-file nodeapp.zip \
+                        http://54.85.207.105:8081/repository/nodejs/nodeapp.zip
                 '''
             }
         }
@@ -62,8 +65,7 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 sh '''
-                    docker build \
-                    -t kishangollamudi/nodeapp:${BUILD_NUMBER} .
+                    docker build -t kishan/nodeapp:latest .
                 '''
             }
         }
@@ -72,7 +74,7 @@ pipeline {
             steps {
                 sh '''
                     echo $DOCKER_HUB_PSW | docker login -u $DOCKER_HUB_USR --password-stdin
-                    docker push kishangollamudi/nodeapp:${BUILD_NUMBER}
+                    docker push kishan/nodeapp:latest
                 '''
             }
         }
