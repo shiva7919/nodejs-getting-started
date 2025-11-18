@@ -46,18 +46,19 @@ pipeline {
 
         stage('Upload to Nexus') {
             steps {
-                sh '''
-                    echo "Creating tar.gz..."
-                    tar --warning=no-file-changed -czf nodeapp.tar.gz .
+                withCredentials([usernamePassword(credentialsId: 'NEXUS-CRED', usernameVariable: 'NEXUS_USER', passwordVariable: 'NEXUS_PASS')]) {
+                    sh '''
+                        echo "Creating TAR..."
+                        tar --ignore-failed-read --warning=no-file-changed -czf nodeapp.tar.gz *
 
-                    echo "Uploading to Nexus..."
-                    curl -v -u $NEXUS_CRED_USR:$NEXUS_CRED_PSW \
-                        --upload-file nodeapp.tar.gz \
-                        http://3.89.29.36:8081/repository/nodejs/nodeapp.tar.gz
-                '''
+                        echo "Uploading to Nexus..."
+                        curl -v -u $NEXUS_USER:$NEXUS_PASS \
+                            --upload-file nodeapp.tar.gz \
+                            http://3.89.29.36:8081/repository/nodejs/nodeapp.tar.gz
+                    '''
+                }
             }
         }
-
 
         stage('Build Docker Image') {
             steps {
