@@ -37,7 +37,7 @@ pipeline {
                         sonar-scanner \
                           -Dsonar.projectKey=nodeapp \
                           -Dsonar.sources=. \
-                          -Dsonar.host.url=http://54.85.207.105:9000 \
+                          -Dsonar.host.url=http://3.89.29.36:9000 \
                           -Dsonar.login=$SONAR_TOKEN
                     '''
                 }
@@ -49,7 +49,7 @@ pipeline {
                 sh '''
                     curl -v -u $NEXUS_CRED_USR:$NEXUS_CRED_PSW \
                         --upload-file nodeapp.zip \
-                        http://54.85.207.105:8081/repository/nodejs/nodeapp.zip
+                        http://3.89.29.36:8081/repository/nodejs/nodeapp.zip
                 '''
             }
         }
