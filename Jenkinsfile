@@ -47,14 +47,17 @@ pipeline {
         stage('Upload to Nexus') {
             steps {
                 sh '''
-                    tar -czf nodeapp.tar.gz .
+                    echo "Creating tar.gz..."
+                    tar --warning=no-file-changed -czf nodeapp.tar.gz .
 
+                    echo "Uploading to Nexus..."
                     curl -v -u $NEXUS_CRED_USR:$NEXUS_CRED_PSW \
                         --upload-file nodeapp.tar.gz \
                         http://3.89.29.36:8081/repository/nodejs/nodeapp.tar.gz
                 '''
             }
         }
+
 
         stage('Build Docker Image') {
             steps {
