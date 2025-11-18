@@ -4,7 +4,7 @@ pipeline {
     environment {
         SONAR_TOKEN = credentials('sonar-token')
         NEXUS_CRED  = credentials('NEXUS-CRED')
-        DOCKER_HUB  = credentials('dockerhub-user')
+        DOCKER_HUB  = credentials('dockerhub')
     }
 
     stages {
