@@ -2,7 +2,7 @@ pipeline {
   agent any
 
   environment {
-    SONAR_TOKEN = credentials('sonar-token')    // must exist in Jenkins
+    SONAR_TOKEN = credentials('sonar-token')    // ensure this credential exists
   }
 
   stages {
@@ -16,15 +16,25 @@ pipeline {
     stage('Install Dependencies') {
       agent {
         docker {
-          image 'node:18'
-          args  '-v /root/.npm:/root/.npm'
+          image 'node:22'                 // match package engine (20/22/24)
+          args  '-u root:root -v /root/.npm:/root/.npm'
         }
       }
       steps {
         sh '''
           set -eu
+          echo "Running as: $(id -u):$(id -g) $(id -un 2>/dev/null || true)"
           echo "Node: $(node -v) / NPM: $(npm -v)"
-          if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; else npm install --no-audit --no-fund; fi
+          # remove any existing node_modules that may have wrong perms
+          rm -rf node_modules || true
+          # Install reproducibly if lockfile exists
+          if [ -f package-lock.json ]; then
+            npm ci --no-audit --no-fund --unsafe-perm
+          else
+            npm install --no-audit --no-fund --unsafe-perm
+          fi
+          # Give workspace back to Jenkins (uid 1000) so subsequent stages can access files
+          chown -R 1000:1000 .
         '''
       }
     }
@@ -48,17 +58,15 @@ pipeline {
 
     stage('Prepare Artifact') {
       agent {
-        docker { image 'node:18' }    // has GNU tar
+        docker { image 'node:22' }    // node image has GNU tar
       }
       steps {
         sh '''
           set -eu
           echo "Creating artifact (excluding .git and node_modules)..."
-          # Create archive in /tmp (outside workspace) to avoid tar reading its own output, then move it back
           TAR_TMP=/tmp/nodeapp-$$.tar.gz
           tar --exclude='.git' --exclude='node_modules' -czf "${TAR_TMP}" .
           mv "${TAR_TMP}" ./nodeapp.tar.gz
-          echo "Created nodeapp.tar.gz:"
           ls -lh nodeapp.tar.gz || true
         '''
       }
@@ -69,7 +77,6 @@ pipeline {
         docker { image 'debian:12-slim' }
       }
       steps {
-        // don't fail the whole pipeline if upload fails — mark stage UNSTABLE and continue
         catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
           withCredentials([usernamePassword(
             credentialsId: 'nexus',
@@ -134,14 +141,8 @@ pipeline {
       echo "Pipeline finished!"
       sh 'ls -lh nodeapp.tar.gz || true'
     }
-    success {
-      echo "Pipeline succeeded."
-    }
-    unstable {
-      echo "Pipeline is unstable (some non-blocking stage failed). Check logs."
-    }
-    failure {
-      echo "Pipeline failed — check the failing stage output."
-    }
+    success { echo "Pipeline succeeded." }
+    unstable { echo "Pipeline unstable (non-blocking stage failed)." }
+    failure { echo "Pipeline failed — check the failing stage output." }
   }
 }
