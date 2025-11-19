@@ -2,15 +2,14 @@ pipeline {
   agent any
 
   environment {
-    // Ensure these credentials exist in Jenkins (IDs must match)
-    SONAR_TOKEN = credentials('sonar-token')
+    SONAR_TOKEN = credentials('sonar-token')    // must exist in Jenkins
   }
 
   stages {
+
     stage('Checkout') {
       steps {
-        git branch: 'main',
-            url: 'https://github.com/shiva7919/nodejs-getting-started.git'
+        git branch: 'main', url: 'https://github.com/shiva7919/nodejs-getting-started.git'
       }
     }
 
@@ -24,15 +23,8 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
-          echo "Node version: $(node -v)"
-          echo "NPM version: $(npm -v)"
-          echo "Installing Node dependencies..."
-          # Prefer npm ci when lockfile exists; fallback to npm install
-          if [ -f package-lock.json ]; then
-            npm ci --no-audit --no-fund
-          else
-            npm install --no-audit --no-fund
-          fi
+          echo "Node: $(node -v) / NPM: $(npm -v)"
+          if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; else npm install --no-audit --no-fund; fi
         '''
       }
     }
@@ -54,27 +46,41 @@ pipeline {
       }
     }
 
-    stage('Upload to Nexus') {
-      agent { docker { image 'curlimages/curl:8.2.1' } }
+    stage('Prepare Artifact') {
+      agent {
+        docker { image 'node:18' }    // node image has GNU tar (Debian variant)
+      }
       steps {
-        withCredentials([usernamePassword(
-          credentialsId: 'nexus',
-          usernameVariable: 'NEXUS_USER',
-          passwordVariable: 'NEXUS_PASS'
-        )]) {
-          sh '''
-            set -euo pipefail
-            echo "Packaging artifact (excluding .git and node_modules)..."
-            # BusyBox tar (used in some images) supports --exclude, avoid GNU-only flags
-            tar -czf nodeapp.tar.gz . --exclude=.git --exclude=node_modules || true
+        sh '''
+          set -euo pipefail
+          echo "Creating artifact (excluding .git and node_modules)..."
+          tar -czf nodeapp.tar.gz . --exclude=.git --exclude=node_modules
+          ls -lh nodeapp.tar.gz || true
+        '''
+      }
+    }
 
-            echo "Artifact size:"
-            ls -lh nodeapp.tar.gz || true
-
-            echo "Uploading to Nexus..."
-            curl -v -u ${NEXUS_USER}:${NEXUS_PASS} --upload-file nodeapp.tar.gz \
-              http://3.85.22.198:8081/repository/nodejs/nodeapp-$(date +%Y%m%d%H%M%S).tar.gz
-          '''
+    stage('Upload to Nexus') {
+      agent {
+        docker { image 'debian:12-slim' }
+      }
+      steps {
+        // don't fail the whole pipeline if upload fails — mark stage UNSTABLE and continue
+        catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
+          withCredentials([usernamePassword(
+            credentialsId: 'nexus',
+            usernameVariable: 'NEXUS_USER',
+            passwordVariable: 'NEXUS_PASS'
+          )]) {
+            sh '''
+              set -euo pipefail
+              apt-get update -y
+              apt-get install -y --no-install-recommends curl tar gzip ca-certificates
+              echo "Uploading artifact to Nexus..."
+              curl -v -u "${NEXUS_USER}:${NEXUS_PASS}" --upload-file nodeapp.tar.gz \
+                "http://3.85.22.198:8081/repository/nodejs/nodeapp-$(date +%Y%m%d%H%M%S).tar.gz"
+            '''
+          }
         }
       }
     }
@@ -116,17 +122,22 @@ pipeline {
         }
       }
     }
-  }
+
+  } // stages
 
   post {
     always {
       echo "Pipeline finished!"
+      sh 'ls -lh nodeapp.tar.gz || true'
     }
     success {
       echo "Pipeline succeeded."
     }
+    unstable {
+      echo "Pipeline is unstable (some non-blocking stage failed). Check logs."
+    }
     failure {
-      echo "Pipeline failed — check the logs above for the failing stage."
+      echo "Pipeline failed — check the failing stage output."
     }
   }
 }
