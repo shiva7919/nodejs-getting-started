@@ -2,7 +2,7 @@ pipeline {
   agent any
 
   environment {
-    SONAR_TOKEN = credentials('sonar-token')    // ensure this credential exists
+    SONAR_TOKEN = credentials('sonar-token')    // ensure this exists in Jenkins
   }
 
   stages {
@@ -25,12 +25,14 @@ pipeline {
           set -eu
           echo "Running as: $(id -u):$(id -g) $(id -un 2>/dev/null || true)"
           echo "Node: $(node -v) / NPM: $(npm -v)"
+          # Ensure clean install and avoid permission issues
           rm -rf node_modules || true
           if [ -f package-lock.json ]; then
             npm ci --no-audit --no-fund --unsafe-perm
           else
             npm install --no-audit --no-fund --unsafe-perm
           fi
+          # Return ownership to Jenkins user so subsequent stages (non-root) can access files
           chown -R 1000:1000 .
         '''
       }
@@ -43,6 +45,7 @@ pipeline {
       steps {
         sh '''
           set -eu
+          echo "Running SonarQube scanner..."
           sonar-scanner \
             -Dsonar.projectKey=nodeapp \
             -Dsonar.sources=. \
@@ -59,7 +62,9 @@ pipeline {
       steps {
         sh '''
           set -eu
+          echo "Creating artifact (excluding .git and node_modules)..."
           TAR_TMP=/tmp/nodeapp-$$.tar.gz
+          # create tar outside workspace to avoid reading the file being written
           tar --exclude='.git' --exclude='node_modules' -czf "${TAR_TMP}" .
           mv "${TAR_TMP}" ./nodeapp.tar.gz
           ls -lh nodeapp.tar.gz || true
@@ -71,24 +76,29 @@ pipeline {
       agent {
         docker {
           image 'debian:12-slim'
-          args  '-u root:root'               // run as root so apt-get can run
+          args  '-u root:root'   // run as root so apt-get works
         }
       }
       steps {
-        catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
-          withCredentials([usernamePassword(
-            credentialsId: 'nexus',
-            usernameVariable: 'NEXUS_USER',
-            passwordVariable: 'NEXUS_PASS'
-          )]) {
-            sh '''
-              set -eu
-              apt-get update -y
-              apt-get install -y --no-install-recommends curl gzip ca-certificates
-              curl -v -u "${NEXUS_USER}:${NEXUS_PASS}" --upload-file nodeapp.tar.gz \
-                "http://3.85.22.198:8081/repository/nodejs/nodeapp-$(date +%Y%m%d%H%M%S).tar.gz"
-            '''
-          }
+        withCredentials([usernamePassword(
+          credentialsId: 'nexus',
+          usernameVariable: 'NEXUS_USER',
+          passwordVariable: 'NEXUS_PASS'
+        )]) {
+          sh '''
+            set -eu
+            apt-get update -y
+            apt-get install -y --no-install-recommends curl ca-certificates
+            echo "Uploading artifact to Nexus RAW repo..."
+
+            ARTIFACT_NAME="nodeapp-$(date +%Y%m%d%H%M%S).tar.gz"
+            UPLOAD_URL="http://3.85.22.198:8081/repository/nodejs/${ARTIFACT_NAME}"
+
+            echo "Uploading to ${UPLOAD_URL}"
+            curl -v -u "${NEXUS_USER}:${NEXUS_PASS}" --upload-file nodeapp.tar.gz "${UPLOAD_URL}"
+
+            echo "Upload complete: ${ARTIFACT_NAME}"
+          '''
         }
       }
     }
@@ -97,12 +107,13 @@ pipeline {
       agent {
         docker {
           image 'docker:24.0.5-cli'
-          args  '-u root:root -v /var/run/docker.sock:/var/run/docker.sock'  // run as root + mount docker.sock
+          args  '-u root:root -v /var/run/docker.sock:/var/run/docker.sock'
         }
       }
       steps {
         sh '''
           set -eu
+          echo "Building Docker image..."
           docker build -t shivasarla2398/nodeapp:latest .
         '''
       }
@@ -112,7 +123,7 @@ pipeline {
       agent {
         docker {
           image 'docker:24.0.5-cli'
-          args  '-u root:root -v /var/run/docker.sock:/var/run/docker.sock'  // run as root + mount docker.sock
+          args  '-u root:root -v /var/run/docker.sock:/var/run/docker.sock'
         }
       }
       steps {
@@ -137,8 +148,11 @@ pipeline {
       echo "Pipeline finished!"
       sh 'ls -lh nodeapp.tar.gz || true'
     }
-    success { echo "Pipeline succeeded." }
-    unstable { echo "Pipeline unstable (non-blocking stage failed)." }
-    failure { echo "Pipeline failed — check the failing stage output." }
+    success {
+      echo "Pipeline succeeded."
+    }
+    failure {
+      echo "Pipeline failed — check the failing stage output."
+    }
   }
 }
