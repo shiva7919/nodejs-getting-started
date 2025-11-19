@@ -12,7 +12,7 @@ pipeline {
         stage('Checkout') {
             steps {
                 git branch: 'main',
-                    url: 'https://github.com/KishanGollamudi/nodejs-getting-started.git'
+                    url: 'https://github.com/shiva7919/nodejs-getting-started.git'
             }
         }
 
