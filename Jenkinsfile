@@ -48,13 +48,17 @@ pipeline {
 
     stage('Prepare Artifact') {
       agent {
-        docker { image 'node:18' }    // node image has GNU tar (Debian variant)
+        docker { image 'node:18' }    // has GNU tar
       }
       steps {
         sh '''
           set -eu
           echo "Creating artifact (excluding .git and node_modules)..."
-          tar -czf nodeapp.tar.gz . --exclude=.git --exclude=node_modules
+          # Create archive in /tmp (outside workspace) to avoid tar reading its own output, then move it back
+          TAR_TMP=/tmp/nodeapp-$$.tar.gz
+          tar --exclude='.git' --exclude='node_modules' -czf "${TAR_TMP}" .
+          mv "${TAR_TMP}" ./nodeapp.tar.gz
+          echo "Created nodeapp.tar.gz:"
           ls -lh nodeapp.tar.gz || true
         '''
       }
@@ -65,6 +69,7 @@ pipeline {
         docker { image 'debian:12-slim' }
       }
       steps {
+        // don't fail the whole pipeline if upload fails — mark stage UNSTABLE and continue
         catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
           withCredentials([usernamePassword(
             credentialsId: 'nexus',
@@ -74,7 +79,7 @@ pipeline {
             sh '''
               set -eu
               apt-get update -y
-              apt-get install -y --no-install-recommends curl tar gzip ca-certificates
+              apt-get install -y --no-install-recommends curl gzip ca-certificates
               echo "Uploading artifact to Nexus..."
               curl -v -u "${NEXUS_USER}:${NEXUS_PASS}" --upload-file nodeapp.tar.gz \
                 "http://3.85.22.198:8081/repository/nodejs/nodeapp-$(date +%Y%m%d%H%M%S).tar.gz"
