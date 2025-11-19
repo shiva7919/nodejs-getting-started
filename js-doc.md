@@ -296,31 +296,159 @@ A simple Jenkins Declarative pipeline that builds, scans (optional), pushes to D
 ```groovy
 pipeline {
   agent any
+
   environment {
-    IMAGE = 'yourhubusername/nodeapp'
-    TAG = "${env.BUILD_NUMBER}"
+    SONAR_TOKEN = credentials('sonar-token')    // ensure this exists in Jenkins
   }
+
   stages {
-    stage('Checkout') { steps { checkout scm } }
-    stage('Build') {
+
+    stage('Checkout') {
       steps {
-        sh 'docker build -t $IMAGE:$TAG .'
+        git branch: 'main', url: 'https://github.com/shiva7919/nodejs-getting-started.git'
       }
     }
-    stage('Test') { steps { /* run tests here */ } }
-    stage('Push') {
+
+    stage('Install Dependencies') {
+      agent {
+        docker {
+          image 'node:22'
+          args  '-u root:root -v /root/.npm:/root/.npm'
+        }
+      }
       steps {
-        withCredentials([usernamePassword(credentialsId: 'docker-hub', usernameVariable: 'DH_USER', passwordVariable: 'DH_PASS')]) {
-          sh 'echo $DH_PASS | docker login -u $DH_USER --password-stdin'
-          sh 'docker push $IMAGE:$TAG'
+        sh '''
+          set -eu
+          echo "Running as: $(id -u):$(id -g) $(id -un 2>/dev/null || true)"
+          echo "Node: $(node -v) / NPM: $(npm -v)"
+          # Ensure clean install and avoid permission issues
+          rm -rf node_modules || true
+          if [ -f package-lock.json ]; then
+            npm ci --no-audit --no-fund --unsafe-perm
+          else
+            npm install --no-audit --no-fund --unsafe-perm
+          fi
+          # Return ownership to Jenkins user so subsequent stages (non-root) can access files
+          chown -R 1000:1000 .
+        '''
+      }
+    }
+
+    stage('SonarQube Analysis') {
+      agent {
+        docker { image 'sonarsource/sonar-scanner-cli:latest' }
+      }
+      steps {
+        sh '''
+          set -eu
+          echo "Running SonarQube scanner..."
+          sonar-scanner \
+            -Dsonar.projectKey=nodeapp \
+            -Dsonar.sources=. \
+            -Dsonar.host.url=http://3.85.22.198:9000 \
+            -Dsonar.login=${SONAR_TOKEN}
+        '''
+      }
+    }
+
+    stage('Prepare Artifact') {
+      agent {
+        docker { image 'node:22' }
+      }
+      steps {
+        sh '''
+          set -eu
+          echo "Creating artifact (excluding .git and node_modules)..."
+          TAR_TMP=/tmp/nodeapp-$$.tar.gz
+          # create tar outside workspace to avoid reading the file being written
+          tar --exclude='.git' --exclude='node_modules' -czf "${TAR_TMP}" .
+          mv "${TAR_TMP}" ./nodeapp.tar.gz
+          ls -lh nodeapp.tar.gz || true
+        '''
+      }
+    }
+
+    stage('Upload to Nexus') {
+      agent {
+        docker {
+          image 'debian:12-slim'
+          args  '-u root:root'   // run as root so apt-get works
+        }
+      }
+      steps {
+        withCredentials([usernamePassword(
+          credentialsId: 'nexus',
+          usernameVariable: 'NEXUS_USER',
+          passwordVariable: 'NEXUS_PASS'
+        )]) {
+          sh '''
+            set -eu
+            apt-get update -y
+            apt-get install -y --no-install-recommends curl ca-certificates
+            echo "Uploading artifact to Nexus RAW repo..."
+
+            ARTIFACT_NAME="nodeapp-$(date +%Y%m%d%H%M%S).tar.gz"
+            UPLOAD_URL="http://3.85.22.198:8081/repository/nodejs/${ARTIFACT_NAME}"
+
+            echo "Uploading to ${UPLOAD_URL}"
+            curl -v -u "${NEXUS_USER}:${NEXUS_PASS}" --upload-file nodeapp.tar.gz "${UPLOAD_URL}"
+
+            echo "Upload complete: ${ARTIFACT_NAME}"
+          '''
         }
       }
     }
-    stage('Deploy') {
-      steps {
-        // Simple SSH deploy using SSH plugin or scripts
-        // Example: ssh ubuntu@ec2 "docker pull $IMAGE:$TAG && docker stop nodeapp || true && docker rm nodeapp || true && docker run -d --name nodeapp -p 3000:5006 $IMAGE:$TAG"
+
+    stage('Build Docker Image') {
+      agent {
+        docker {
+          image 'docker:24.0.5-cli'
+          args  '-u root:root -v /var/run/docker.sock:/var/run/docker.sock'
+        }
       }
+      steps {
+        sh '''
+          set -eu
+          echo "Building Docker image..."
+          docker build -t shivasarla2398/nodeapp:latest .
+        '''
+      }
+    }
+
+    stage('Push Docker Image') {
+      agent {
+        docker {
+          image 'docker:24.0.5-cli'
+          args  '-u root:root -v /var/run/docker.sock:/var/run/docker.sock'
+        }
+      }
+      steps {
+        withCredentials([usernamePassword(
+          credentialsId: 'dockerhub',
+          usernameVariable: 'DOCKER_USER',
+          passwordVariable: 'DOCKER_PASS'
+        )]) {
+          sh '''
+            set -eu
+            echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+            docker push shivasarla2398/nodeapp:latest
+          '''
+        }
+      }
+    }
+
+  } // stages
+
+  post {
+    always {
+      echo "Pipeline finished!"
+      sh 'ls -lh nodeapp.tar.gz || true'
+    }
+    success {
+      echo "Pipeline succeeded."
+    }
+    failure {
+      echo "Pipeline failed — check the failing stage output."
     }
   }
 }
@@ -480,6 +608,9 @@ sudo certbot renew --dry-run
 (If your repo includes the screenshots linked at the top of this issue/PR, reference them here as visual aid.)
 
 ![screenshot-1](https://github.com/user-attachments/assets/3c85187a-ba1a-4980-a8bb-4cffa7bf5166)
+<img width="1918" height="1079" alt="Screenshot 2025-11-19 141232" src="https://github.com/user-attachments/assets/b269dc5c-dce0-4bc2-8bb8-7c43be1bc95c" />
+<img width="1917" height="1079" alt="Screenshot 2025-11-19 141212" src="https://github.com/user-attachments/assets/01530e62-ddaf-4c29-8048-51228125a6db" />
+<img width="1919" height="1079" alt="Screenshot 2025-11-19 141327" src="https://github.com/user-attachments/assets/56e91766-0dc1-414e-b919-ba5a2ca9c88f" />
 
 
 ---
