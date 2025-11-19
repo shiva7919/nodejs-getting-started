@@ -16,7 +16,7 @@ pipeline {
     stage('Install Dependencies') {
       agent {
         docker {
-          image 'node:22'                 // match package engine (20/22/24)
+          image 'node:22'
           args  '-u root:root -v /root/.npm:/root/.npm'
         }
       }
@@ -25,15 +25,12 @@ pipeline {
           set -eu
           echo "Running as: $(id -u):$(id -g) $(id -un 2>/dev/null || true)"
           echo "Node: $(node -v) / NPM: $(npm -v)"
-          # remove any existing node_modules that may have wrong perms
           rm -rf node_modules || true
-          # Install reproducibly if lockfile exists
           if [ -f package-lock.json ]; then
             npm ci --no-audit --no-fund --unsafe-perm
           else
             npm install --no-audit --no-fund --unsafe-perm
           fi
-          # Give workspace back to Jenkins (uid 1000) so subsequent stages can access files
           chown -R 1000:1000 .
         '''
       }
@@ -46,7 +43,6 @@ pipeline {
       steps {
         sh '''
           set -eu
-          echo "Running SonarQube scanner..."
           sonar-scanner \
             -Dsonar.projectKey=nodeapp \
             -Dsonar.sources=. \
@@ -58,12 +54,11 @@ pipeline {
 
     stage('Prepare Artifact') {
       agent {
-        docker { image 'node:22' }    // node image has GNU tar
+        docker { image 'node:22' }
       }
       steps {
         sh '''
           set -eu
-          echo "Creating artifact (excluding .git and node_modules)..."
           TAR_TMP=/tmp/nodeapp-$$.tar.gz
           tar --exclude='.git' --exclude='node_modules' -czf "${TAR_TMP}" .
           mv "${TAR_TMP}" ./nodeapp.tar.gz
@@ -74,7 +69,10 @@ pipeline {
 
     stage('Upload to Nexus') {
       agent {
-        docker { image 'debian:12-slim' }
+        docker {
+          image 'debian:12-slim'
+          args  '-u root:root'               // run as root so apt-get can run
+        }
       }
       steps {
         catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
@@ -87,7 +85,6 @@ pipeline {
               set -eu
               apt-get update -y
               apt-get install -y --no-install-recommends curl gzip ca-certificates
-              echo "Uploading artifact to Nexus..."
               curl -v -u "${NEXUS_USER}:${NEXUS_PASS}" --upload-file nodeapp.tar.gz \
                 "http://3.85.22.198:8081/repository/nodejs/nodeapp-$(date +%Y%m%d%H%M%S).tar.gz"
             '''
@@ -100,13 +97,12 @@ pipeline {
       agent {
         docker {
           image 'docker:24.0.5-cli'
-          args  '-v /var/run/docker.sock:/var/run/docker.sock'
+          args  '-u root:root -v /var/run/docker.sock:/var/run/docker.sock'  // run as root + mount docker.sock
         }
       }
       steps {
         sh '''
           set -eu
-          echo "Building Docker image..."
           docker build -t shivasarla2398/nodeapp:latest .
         '''
       }
@@ -116,7 +112,7 @@ pipeline {
       agent {
         docker {
           image 'docker:24.0.5-cli'
-          args  '-v /var/run/docker.sock:/var/run/docker.sock'
+          args  '-u root:root -v /var/run/docker.sock:/var/run/docker.sock'  // run as root + mount docker.sock
         }
       }
       steps {
