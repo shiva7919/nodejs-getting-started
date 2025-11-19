@@ -17,12 +17,12 @@ pipeline {
       agent {
         docker {
           image 'node:18'
-          args  '-u root:root -v /root/.npm:/root/.npm'
+          args  '-v /root/.npm:/root/.npm'
         }
       }
       steps {
         sh '''
-          set -euo pipefail
+          set -eu
           echo "Node: $(node -v) / NPM: $(npm -v)"
           if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; else npm install --no-audit --no-fund; fi
         '''
@@ -35,7 +35,7 @@ pipeline {
       }
       steps {
         sh '''
-          set -euo pipefail
+          set -eu
           echo "Running SonarQube scanner..."
           sonar-scanner \
             -Dsonar.projectKey=nodeapp \
@@ -52,7 +52,7 @@ pipeline {
       }
       steps {
         sh '''
-          set -euo pipefail
+          set -eu
           echo "Creating artifact (excluding .git and node_modules)..."
           tar -czf nodeapp.tar.gz . --exclude=.git --exclude=node_modules
           ls -lh nodeapp.tar.gz || true
@@ -65,7 +65,6 @@ pipeline {
         docker { image 'debian:12-slim' }
       }
       steps {
-        // don't fail the whole pipeline if upload fails — mark stage UNSTABLE and continue
         catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
           withCredentials([usernamePassword(
             credentialsId: 'nexus',
@@ -73,7 +72,7 @@ pipeline {
             passwordVariable: 'NEXUS_PASS'
           )]) {
             sh '''
-              set -euo pipefail
+              set -eu
               apt-get update -y
               apt-get install -y --no-install-recommends curl tar gzip ca-certificates
               echo "Uploading artifact to Nexus..."
@@ -94,7 +93,7 @@ pipeline {
       }
       steps {
         sh '''
-          set -euo pipefail
+          set -eu
           echo "Building Docker image..."
           docker build -t shivasarla2398/nodeapp:latest .
         '''
@@ -115,7 +114,7 @@ pipeline {
           passwordVariable: 'DOCKER_PASS'
         )]) {
           sh '''
-            set -euo pipefail
+            set -eu
             echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
             docker push shivasarla2398/nodeapp:latest
           '''
