@@ -38,7 +38,7 @@ pipeline {
                         /opt/sonar-scanner/bin/sonar-scanner \
                           -Dsonar.projectKey=nodeapp \
                           -Dsonar.sources=. \
-                          -Dsonar.host.url=http://3.89.29.36:9000 \
+                          -Dsonar.host.url=http://3.85.22.198:9000 \
                           -Dsonar.login=$SONAR_TOKEN
                     '''
                 }
@@ -61,7 +61,7 @@ pipeline {
                         echo "Uploading TAR to Nexus..."
                         curl -v -u $NEXUS_USER:$NEXUS_PASS \
                             --upload-file nodeapp.tar.gz \
-                            http://3.89.29.36:8081/repository/nodejs/nodeapp.tar.gz
+                            http://3.85.22.198:8081/repository/nodejs/nodeapp.tar.gz
                     '''
                 }
             }
@@ -71,7 +71,7 @@ pipeline {
             steps {
                 sh '''
                     echo "Building Docker image..."
-                    docker build -t kishangollamudi/nodeapp:latest .
+                    docker build -t shivasarla2398/nodeapp:latest .
                 '''
             }
         }
@@ -86,7 +86,7 @@ pipeline {
 
                     sh '''
                         echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
-                        docker push kishangollamudi/nodeapp:latest
+                        docker push shivasarla2398/nodeapp:latest
                     '''
                 }
             }
