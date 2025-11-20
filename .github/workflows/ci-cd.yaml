@@ -10,7 +10,6 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      # bring secrets into job env (may be empty if secret not defined)
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
       NEXUS_USER: ${{ secrets.NEXUS_USER }}
       NEXUS_PASS: ${{ secrets.NEXUS_PASS }}
@@ -22,77 +21,51 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Quick secret presence debug (no secret values printed)
+      - name: Debug Secrets Presence (no values exposed)
         run: |
-          echo "SONAR_TOKEN is ${SONAR_TOKEN:+set}"
-          echo "SONAR_HOST_URL secret present? ${SONAR_HOST_URL:+set}"
-          echo "NEXUS_HOST is ${NEXUS_HOST:+set}"
-          echo "DOCKER_USER is ${DOCKER_USER:+set}"
+          echo "SONAR_TOKEN: ${SONAR_TOKEN:+set}"
+          echo "NEXUS_HOST: ${NEXUS_HOST:+set}"
+          echo "DOCKER_USER: ${DOCKER_USER:+set}"
 
-      - name: Validate Sonar token exists
+      - name: Validate Sonar Token Exists
         run: |
           if [ -z "$SONAR_TOKEN" ]; then
-            echo "::error ::Required secret SONAR_TOKEN is missing. Add it in repo Settings → Secrets and variables → Actions."
+            echo "::error ::SONAR_TOKEN is missing. Add it in: GitHub → Repo → Settings → Secrets → Actions"
             exit 1
           fi
 
-      - name: Ensure SONAR_HOST_URL (set fallback and expose as output)
-        id: sonar
+      - name: SonarQube Scan (Using CLI via Docker)
         run: |
-          # Fallback to your EC2 public IP if secret not set
-          if [ -z "$SONAR_HOST_URL" ]; then
-            echo "SONAR_HOST_URL is empty — using fallback http://3.95.246.128:9000"
-            echo "SONAR_HOST_URL=http://3.95.246.128:9000" >> $GITHUB_ENV
-            echo "sonar_host=http://3.95.246.128:9000" >> $GITHUB_OUTPUT
-          else
-            echo "SONAR_HOST_URL already set"
-            echo "SONAR_HOST_URL=$SONAR_HOST_URL" >> $GITHUB_ENV
-            echo "sonar_host=$SONAR_HOST_URL" >> $GITHUB_OUTPUT
-          fi
+          SONAR_HOST="http://3.95.246.128:9000"
+          SONAR_TOKEN="${{ secrets.SONAR_TOKEN }}"
 
-      - name: Set up NodeJS
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
+          echo "Testing connectivity to SonarQube at $SONAR_HOST"
+          curl -v --max-time 10 "$SONAR_HOST/api/server/version"
 
-      - name: Install Dependencies
-        run: |
-          node -v
-          npm -v
-          npm install --no-audit --no-fund
-
-      - name: SonarQube Scan
-        uses: sonarsource/sonarqube-scan-action@v2
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          # Pass the resolved host that was set as step output above
-          SONAR_HOST_URL: ${{ steps.sonar.outputs.sonar_host }}
-        with:
-          args: >
-            -Dsonar.projectKey=nodeapp
-            -Dsonar.sources=.
+          echo "Running Sonar Scanner..."
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}":/usr/src \
+            -w /usr/src \
+            sonarsource/sonar-scanner-cli \
+            sonar-scanner \
+              -Dsonar.projectKey=nodeapp \
+              -Dsonar.sources=. \
+              -Dsonar.host.url="$SONAR_HOST" \
+              -Dsonar.login="$SONAR_TOKEN"
 
       - name: Create TAR Artifact
         run: tar -czf nodeapp.tar.gz *
 
       - name: Upload to Nexus (RAW Repository)
-        env:
-          NEXUS_USER: ${{ secrets.NEXUS_USER }}
-          NEXUS_PASS: ${{ secrets.NEXUS_PASS }}
-          NEXUS_HOST: ${{ secrets.NEXUS_HOST }}
         run: |
-          set -e
-          if [ -z "$NEXUS_HOST" ]; then
-            echo "::error ::NEXUS_HOST secret is not set. Set NEXUS_HOST to e.g. http://3.95.246.128:8081"
+          if [ -z "${NEXUS_HOST}" ]; then
+            echo "::error ::NEXUS_HOST secret is missing"
             exit 1
           fi
-          if [ -z "$NEXUS_USER" ] || [ -z "$NEXUS_PASS" ]; then
-            echo "::error ::NEXUS_USER or NEXUS_PASS missing."
-            exit 1
-          fi
-          curl -v -u "$NEXUS_USER:$NEXUS_PASS" \
+
+          curl -v -u "${NEXUS_USER}:${NEXUS_PASS}" \
             --upload-file nodeapp.tar.gz \
-            "$NEXUS_HOST/repository/nodejs/nodeapp.tar.gz"
+            "${NEXUS_HOST}/repository/nodejs/nodeapp.tar.gz"
 
       - name: Build Docker Image
         run: |
