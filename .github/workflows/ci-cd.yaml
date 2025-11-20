@@ -8,41 +8,80 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     env:
+      # repo secrets (must exist)
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+      NEXUS_HOST: ${{ secrets.NEXUS_HOST }}
       NEXUS_USER: ${{ secrets.NEXUS_USER }}
       NEXUS_PASS: ${{ secrets.NEXUS_PASS }}
-      NEXUS_HOST: ${{ secrets.NEXUS_HOST }}
       DOCKER_USER: ${{ secrets.DOCKER_USER }}
       DOCKER_PASS: ${{ secrets.DOCKER_PASS }}
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Debug Secrets Presence (no values exposed)
-        run: |
-          echo "SONAR_TOKEN: ${SONAR_TOKEN:+set}"
-          echo "NEXUS_HOST: ${NEXUS_HOST:+set}"
-          echo "DOCKER_USER: ${DOCKER_USER:+set}"
+      - name: Node modules cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
 
-      - name: Validate Sonar Token Exists
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
         run: |
-          if [ -z "$SONAR_TOKEN" ]; then
-            echo "::error ::SONAR_TOKEN is missing. Add it in: GitHub → Repo → Settings → Secrets → Actions"
+          node -v
+          npm -v
+          npm ci --no-audit --no-fund
+
+      - name: Validate important secrets
+        run: |
+          if [ -z "${{ secrets.SONAR_TOKEN }}" ]; then
+            echo "::error ::SONAR_TOKEN is missing. Add it in repo Settings → Secrets → Actions"
+            exit 1
+          fi
+          if [ -z "${{ secrets.DOCKER_USER }}" ] || [ -z "${{ secrets.DOCKER_PASS }}" ]; then
+            echo "::error ::DOCKER_USER or DOCKER_PASS missing."
+            exit 1
+          fi
+          if [ -z "${{ secrets.NEXUS_HOST }}" ] || [ -z "${{ secrets.NEXUS_USER }}" ] || [ -z "${{ secrets.NEXUS_PASS }}" ]; then
+            echo "::error ::Nexus secrets missing (NEXUS_HOST, NEXUS_USER, NEXUS_PASS)."
             exit 1
           fi
 
-      - name: SonarQube Scan (Using CLI via Docker)
+      - name: Resolve SONAR host (fallback safe-guard)
+        id: sonar_resolve
         run: |
-          SONAR_HOST="http://3.95.246.128:9000"
+          # Prefer the secret SONAR_HOST_URL but fall back to explicit IP if needed
+          if [ -z "${{ secrets.SONAR_HOST_URL }}" ]; then
+            echo "SONAR_HOST_URL not set; using fallback http://3.95.246.128:9000"
+            echo "sonar_host=http://3.95.246.128:9000" >> $GITHUB_OUTPUT
+            echo "SONAR_HOST_URL=http://3.95.246.128:9000" >> $GITHUB_ENV
+          else
+            echo "sonar_host=${{ secrets.SONAR_HOST_URL }}" >> $GITHUB_OUTPUT
+            echo "SONAR_HOST_URL=${{ secrets.SONAR_HOST_URL }}" >> $GITHUB_ENV
+          fi
+
+      - name: Test SonarQube connectivity (runner -> Sonar)
+        run: |
+          echo "Testing connectivity to ${{ steps.sonar_resolve.outputs.sonar_host }}/api/server/version"
+          curl -f --max-time 10 "${{ steps.sonar_resolve.outputs.sonar_host }}/api/server/version"
+        shell: bash
+
+      - name: SonarQube scan (via sonar-scanner CLI Docker)
+        run: |
+          SONAR_HOST="${{ steps.sonar_resolve.outputs.sonar_host }}"
           SONAR_TOKEN="${{ secrets.SONAR_TOKEN }}"
 
-          echo "Testing connectivity to SonarQube at $SONAR_HOST"
-          curl -v --max-time 10 "$SONAR_HOST/api/server/version"
-
-          echo "Running Sonar Scanner..."
+          echo "Running sonar-scanner against $SONAR_HOST"
           docker run --rm \
             -v "${GITHUB_WORKSPACE}":/usr/src \
             -w /usr/src \
@@ -51,31 +90,34 @@ jobs:
               -Dsonar.projectKey=nodeapp \
               -Dsonar.sources=. \
               -Dsonar.host.url="$SONAR_HOST" \
-              -Dsonar.login="$SONAR_TOKEN"
+              -Dsonar.login="$SONAR_TOKEN" \
+              -Dsonar.scm.provider=git
+        shell: bash
 
-      - name: Create TAR Artifact
+      - name: Create TAR artifact
         run: tar -czf nodeapp.tar.gz *
 
-      - name: Upload to Nexus (RAW Repository)
+      - name: Upload artifact to Nexus (raw repository)
         run: |
-          if [ -z "${NEXUS_HOST}" ]; then
-            echo "::error ::NEXUS_HOST secret is missing"
-            exit 1
-          fi
-
+          set -e
+          echo "Uploading nodeapp.tar.gz to Nexus at ${NEXUS_HOST}/repository/nodejs/nodeapp.tar.gz"
           curl -v -u "${NEXUS_USER}:${NEXUS_PASS}" \
             --upload-file nodeapp.tar.gz \
             "${NEXUS_HOST}/repository/nodejs/nodeapp.tar.gz"
 
-      - name: Build Docker Image
+      - name: Build Docker image
         run: |
-          docker build -t "${{ secrets.DOCKER_USER }}/nodeapp:latest" .
+          docker build -t "${DOCKER_USER}/nodeapp:latest" .
 
-      - name: Login to DockerHub
+      - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USER }}
           password: ${{ secrets.DOCKER_PASS }}
 
-      - name: Push Docker Image
-        run: docker push "${{ secrets.DOCKER_USER }}/nodeapp:latest"
+      - name: Push Docker image to Docker Hub
+        run: |
+          docker push "${DOCKER_USER}/nodeapp:latest"
+
+      - name: Workflow finished
+        run: echo "CI/CD pipeline completed."
