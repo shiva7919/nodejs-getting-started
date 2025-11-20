@@ -10,51 +10,56 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-    - name: Set up NodeJS
-      uses: actions/setup-node@v4
-      with:
-        node-version: "20"
+      - name: Set up NodeJS
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
 
-    - name: Install Dependencies
-      run: |
-        node -v
-        npm -v
-        npm install --no-audit --no-fund
+      - name: Install Dependencies
+        run: |
+          node -v
+          npm -v
+          npm install --no-audit --no-fund
 
-    - name: SonarQube Scan
-      uses: sonarsource/sonarqube-scan-action@v2
-      env:
-        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-      with:
-        args: >
-          -Dsonar.projectKey=nodeapp
-          -Dsonar.sources=.
+      - name: SonarQube Scan
+        uses: sonarsource/sonarqube-scan-action@v2
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        with:
+          args: >
+            -Dsonar.projectKey=nodeapp
+            -Dsonar.sources=.
 
-    - name: Create TAR Artifact
-      run: tar -czf nodeapp.tar.gz *
+      - name: Create TAR Artifact
+        run: tar -czf nodeapp.tar.gz *
 
-    - name: Upload to Nexus (RAW Repository)
-      env:
-        NEXUS_USER: ${{ secrets.NEXUS_USER }}
-        NEXUS_PASS: ${{ secrets.NEXUS_PASS }}
-        NEXUS_HOST: ${{ secrets.NEXUS_HOST }}
-      run: |
-        curl -v -u $NEXUS_USER:$NEXUS_PASS \
-          --upload-file nodeapp.tar.gz \
-          $NEXUS_HOST/repository/nodejs/nodeapp.tar.gz
+      - name: Upload to Nexus (RAW Repository)
+        env:
+          NEXUS_USER: ${{ secrets.NEXUS_USER }}
+          NEXUS_PASS: ${{ secrets.NEXUS_PASS }}
+          NEXUS_HOST: ${{ secrets.NEXUS_HOST }}
+        run: |
+          set -e
+          # Ensure repository path ends with repository/nodejs/
+          # The workflow will upload nodeapp.tar.gz to:
+          #   $NEXUS_HOST/repository/nodejs/nodeapp.tar.gz
+          curl -v -u "$NEXUS_USER:$NEXUS_PASS" \
+            --upload-file nodeapp.tar.gz \
+            "$NEXUS_HOST/repository/nodejs/nodeapp.tar.gz"
 
-    - name: Build Docker Image
-      run: docker build -t ${{ secrets.DOCKER_USER }}/nodeapp:latest .
+      - name: Build Docker Image
+        run: |
+          docker build -t "${{ secrets.DOCKER_USER }}/nodeapp:latest" .
 
-    - name: Login to DockerHub
-      uses: docker/login-action@v3
-      with:
-        username: ${{ secrets.DOCKER_USER }}
-        password: ${{ secrets.DOCKER_PASS }}
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USER }}
+          password: ${{ secrets.DOCKER_PASS }}
 
-    - name: Push Docker Image
-      run: docker push ${{ secrets.DOCKER_USER }}/nodeapp:latest
+      - name: Push Docker Image
+        run: docker push "${{ secrets.DOCKER_USER }}/nodeapp:latest"
