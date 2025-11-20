@@ -9,9 +9,45 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    env:
+      # bring secrets into job env (may be empty if secret not defined)
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+      NEXUS_USER: ${{ secrets.NEXUS_USER }}
+      NEXUS_PASS: ${{ secrets.NEXUS_PASS }}
+      NEXUS_HOST: ${{ secrets.NEXUS_HOST }}
+      DOCKER_USER: ${{ secrets.DOCKER_USER }}
+      DOCKER_PASS: ${{ secrets.DOCKER_PASS }}
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+
+      - name: Quick debug (show which secrets are present)
+        # Do NOT print actual secret values. Only show whether set or not.
+        run: |
+          echo "SONAR_TOKEN is ${SONAR_TOKEN:+set}"
+          echo "SONAR_HOST_URL is ${SONAR_HOST_URL:+set}"
+          echo "NEXUS_HOST is ${NEXUS_HOST:+set}"
+          echo "DOCKER_USER is ${DOCKER_USER:+set}"
+      
+      - name: Validate Sonar token exists
+        run: |
+          if [ -z "$SONAR_TOKEN" ]; then
+            echo "::error ::Required secret SONAR_TOKEN is missing. Add it in repo Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+
+      - name: Ensure SONAR_HOST_URL (fallback to EC2 IP)
+        # If SONAR_HOST_URL secret is empty, set a default using your public IP and default port 9000.
+        run: |
+          if [ -z "$SONAR_HOST_URL" ]; then
+            echo "SONAR_HOST_URL is empty — using fallback http://3.95.246.128:9000"
+            echo "SONAR_HOST_URL=http://3.95.246.128:9000" >> $GITHUB_ENV
+          else
+            echo "SONAR_HOST_URL already set"
+            echo "SONAR_HOST_URL=$SONAR_HOST_URL" >> $GITHUB_ENV
+          fi
 
       - name: Set up NodeJS
         uses: actions/setup-node@v4
@@ -27,8 +63,10 @@ jobs:
       - name: SonarQube Scan
         uses: sonarsource/sonarqube-scan-action@v2
         env:
+          # SONAR_TOKEN is required and we validated it above
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+          # SONAR_HOST_URL is ensured/possibly updated into GITHUB_ENV in a previous step
+          SONAR_HOST_URL: ${{ env.SONAR_HOST_URL }}
         with:
           args: >
             -Dsonar.projectKey=nodeapp
@@ -44,9 +82,15 @@ jobs:
           NEXUS_HOST: ${{ secrets.NEXUS_HOST }}
         run: |
           set -e
-          # Ensure repository path ends with repository/nodejs/
-          # The workflow will upload nodeapp.tar.gz to:
-          #   $NEXUS_HOST/repository/nodejs/nodeapp.tar.gz
+          if [ -z "$NEXUS_HOST" ]; then
+            echo "::error ::NEXUS_HOST secret is not set. Set NEXUS_HOST to e.g. http://3.95.246.128:8081"
+            exit 1
+          fi
+          if [ -z "$NEXUS_USER" ] || [ -z "$NEXUS_PASS" ]; then
+            echo "::error ::NEXUS_USER or NEXUS_PASS missing."
+            exit 1
+          fi
+          # upload to raw repository path (ensure repository 'nodejs' exists on Nexus)
           curl -v -u "$NEXUS_USER:$NEXUS_PASS" \
             --upload-file nodeapp.tar.gz \
             "$NEXUS_HOST/repository/nodejs/nodeapp.tar.gz"
